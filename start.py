@@ -18,7 +18,6 @@ def get_title(imdb_id, content_type='movie'):
     """Fetches the title name from Cinemeta using IMDB ID and content type"""
     print(f"Fetching metadata for: {imdb_id} as {content_type}")
 
-    # ──  content_type from the URL path to query the RIGHT endpoint ──
     try:
         url = f"https://v3-cinemeta.strem.io/meta/{content_type}/{imdb_id}.json"
         res = requests.get(url, timeout=5, headers=HEADERS)
@@ -32,7 +31,7 @@ def get_title(imdb_id, content_type='movie'):
     except Exception:
         pass
 
-    # ── Fallback: try the OTHER type in case Stremio mislabeled it ──
+    # Fallback
     fallback_type = 'series' if content_type == 'movie' else 'movie'
     try:
         url = f"https://v3-cinemeta.strem.io/meta/{fallback_type}/{imdb_id}.json"
@@ -52,10 +51,8 @@ def get_title(imdb_id, content_type='movie'):
 
 
 def get_torrents(query, content_type='movie'):
-    """Searches PB API for the query, filters by quality, and sorts by seeders."""
     safe_query = quote(query)
 
-   
     if content_type == 'series':
         category = 200
     else:
@@ -75,11 +72,13 @@ def get_torrents(query, content_type='movie'):
         season_num = None
         episode_num = None
 
+    # --- LOGGING ---
     print(f"  PB API URL: {url}")
-    print(f"  Category: {category} ({'TV' if category == 205 else 'Movie'})")
+    print(f"  Category: {category} ({'TV' if category == 205 else 'Pirating'})")
     print(f"  Required title words: {title_words}")
     if season_num is not None:
         print(f"  Required episode: S{season_num}E{episode_num}")
+    # ---------------------
 
     allowed_keywords = ['1080p', '720p', '4k', '2160p', 'web', 'x265', 'x264', 'h264', 'h265', 'bluray']
 
@@ -124,7 +123,8 @@ def get_torrents(query, content_type='movie'):
                     seeders = 0
 
                 size_bytes = int(item.get('size', 0))
-                size_str = f"{size_bytes / (1024**3):.1f} GB" if size_bytes > 1024**3 else f"{size_bytes / (1024**2):.0f} MB"
+                size_str = f"{size_bytes / (1024**3):.1f} GB" if size_bytes > 1024**3 else f"{size_bytes /
+(1024**2):.0f} MB"
 
                 results.append({
                     "name": "TGBx",
@@ -133,15 +133,13 @@ def get_torrents(query, content_type='movie'):
                     "_seeders": seeders
                 })
 
+            # Sort results by seeders (descending)
             results.sort(key=lambda x: x['_seeders'], reverse=True)
-
-            for r in results:
-                del r['_seeders']
 
             return results
 
     except Exception as e:
-        print(f"API Error: {e}")
+        print(f"  API Error: {e}")
         return []
 
 
@@ -173,15 +171,12 @@ class Handler(BaseHTTPRequestHandler):
                     return
 
                 request_type = parts[2]  # 'movie' or 'series'
-
                 file_name = unquote(parts[3])
                 full_id = file_name.replace('.json', '')
 
                 print(f"Request Type: {request_type}, ID: {full_id}")
 
                 clean_id = full_id.split(':')[0]
-
-                # Pass content type from URL so Cinemeta queries the RIGHT endpoint
                 title = get_title(clean_id, request_type)
 
                 if not title:
@@ -193,22 +188,54 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(json.dumps({"streams": []}).encode('utf-8'))
                     return
 
-                query = title
+                # The 1 .replace is escalating.. any bigger and we must clean it..
+                query = title.replace('&', 'and').replace("'", "").replace('- ', '').replace(':', '').replace('?', '').replace('!', '')
+                streams = []
 
+                # --- DUAL SEARCH LOGIC ----
                 if request_type == 'series' and ':' in full_id:
                     p = full_id.split(':')
                     if len(p) >= 3:
                         try:
                             season = int(p[1])
                             episode = int(p[2])
-                            query = f"{title} S{season:02d}E{episode:02d}"
-                        except Exception:
-                            pass
 
-                print(f"Searching for: {query}")
+                            # Complete Season Sarch
+                            query_season = f"{query} S{season:02d}"
+                            print(f"Searching for: {query_season} (Season Pack)")
+                            streams_season = get_torrents(query_season, request_type)
 
-                #  Pass request_type (from URL) not meta_type (unreliable sometimes) ──
-                streams = get_torrents(query, request_type)
+                            # 2. Specific Episode Search
+                            query_episode = f"{query} S{season:02d}E{episode:02d}"
+                            print(f"Searching for: {query_episode} (Specific Episode)")
+                            streams_episode = get_torrents(query_episode, request_type)
+
+                            # 3. Merge results and remove duplicates
+                            combined_streams = {}
+                            for s in streams_season:
+                                combined_streams[s['infoHash']] = s
+                            for s in streams_episode:
+                                combined_streams[s['infoHash']] = s
+
+                            streams = list(combined_streams.values())
+
+                            # 4. Sort the final combined list by seeders
+                            streams.sort(key=lambda x: x['_seeders'], reverse=True)
+
+                        except Exception as e:
+                            print(f"Error parsing series ID: {e}")
+                            # Fallback to default search if parsing fails
+                            print(f"Searching for: {query} (Fallback)")
+                            streams = get_torrents(query, request_type)
+                else:
+                    # --- STANDARD MOVIE SEARCH ---
+                    print(f"Searching for: {query}")
+                    streams = get_torrents(query, request_type)
+
+                # Clean up internal '_seeders' key before sending to Stremio
+                for r in streams:
+                    if '_seeders' in r:
+                        del r['_seeders']
 
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -219,7 +246,7 @@ class Handler(BaseHTTPRequestHandler):
 
             except Exception as e:
                 print(f"Critical Error: {e}")
-                self.send_error(500, 'something went wrong'(e))
+                self.send_error(500, 'something went wrong')
                 return
 
         if self.path == '/favicon.ico':
