@@ -5,7 +5,6 @@ import sys
 import re
 from urllib.parse import quote, unquote
 
-# Fix Windows encoding
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
 
@@ -19,7 +18,7 @@ def get_title(imdb_id, content_type='movie'):
     """Fetches the title name from Cinemeta using IMDB ID and content type"""
     print(f"Fetching metadata for: {imdb_id} as {content_type}")
 
-    # ── FIX: Use the content_type from the URL path to query the RIGHT endpoint ──
+    # ──  content_type from the URL path to query the RIGHT endpoint ──
     try:
         url = f"https://v3-cinemeta.strem.io/meta/{content_type}/{imdb_id}.json"
         res = requests.get(url, timeout=5, headers=HEADERS)
@@ -173,7 +172,6 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_error(400)
                     return
 
-                # ── FIX: Use request_type from URL as the source of truth ──
                 request_type = parts[2]  # 'movie' or 'series'
 
                 file_name = unquote(parts[3])
@@ -209,7 +207,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 print(f"Searching for: {query}")
 
-                # ── FIX: Pass request_type (from URL) not meta_type (unreliable sometimes) ──
+                #  Pass request_type (from URL) not meta_type (unreliable sometimes) ──
                 streams = get_torrents(query, request_type)
 
                 self.send_response(200)
